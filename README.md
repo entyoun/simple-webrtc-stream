@@ -1,21 +1,22 @@
-# Load Balancer Audio Stream Test
+# WebSocket Network Connectivity Monitor
 
-A WebSocket-based audio streaming server designed for testing F5 load balancers and live migration scenarios. All traffic flows through port 8080, making it perfect for load balancer testing.
+A simple WebSocket-based server that sends timestamp messages every 100ms to connected clients. Perfect for monitoring network connectivity and detecting gaps or interruptions in real-time communication.
 
 ## Features
 
-- Stream audio files (MP3/WAV) to web browsers via WebSocket
-- All traffic flows through port 8080 (load balancer compatible)
-- Real-time audio streaming using raw PCM data
-- Perfect for testing live migrations and failover scenarios
-- Simple web interface for connecting and listening
-- Low-latency audio delivery
+- Sends timestamp messages every 100ms via WebSocket
+- Real-time network gap detection
+- Message counter to track missed messages
+- Simple web interface for monitoring
+- Runs on configurable port (default: 8970)
+- Visual indicators for connectivity issues
 
 ## Requirements
 
-- Python 3.8 or higher
+- Python 3.7 or higher
+- Modern web browser with WebSocket support
 
-**Note**: The required audio processing libraries (FFmpeg) are included with the PyAV package installation. No additional system libraries need to be installed on most systems.
+**Note**: This application uses async/await syntax and is not compatible with Python 2.x (which reached end-of-life in 2020).
 
 ## Installation
 
@@ -31,86 +32,92 @@ A WebSocket-based audio streaming server designed for testing F5 load balancers 
    pip install -r requirements.txt
    ```
 
-4. Add your audio file:
-   - Place an audio file named `audio.mp3` or `audio.wav` in the project root directory
-   - The server will automatically detect and stream the audio file
-
 ## Usage
 
 1. Start the server:
    ```bash
-   python server.py
+   python3 server.py
    ```
 
 2. Open your web browser and navigate to:
    ```
-   http://localhost:8080
+   http://localhost:8970
    ```
 
-3. Click "Start Stream" to begin receiving the audio stream
+3. Click "Start Stream" to begin receiving timestamp messages
 
 4. Click "Stop Stream" to disconnect
 
 ## How It Works
 
-1. **HTTP Server**: Serves the web interface on port 8080
+1. **HTTP Server**: Serves the web interface on port 8970
 2. **WebSocket Connection**: Client connects to `/ws` endpoint for streaming
-3. **Audio Processing**: Server decodes audio file and converts to raw PCM data
-4. **Real-time Streaming**: Audio chunks sent via WebSocket as binary data
-5. **Client Playback**: Browser receives PCM data and plays via Web Audio API
+3. **Timestamp Broadcasting**: Server sends JSON messages every 100ms containing:
+   - Current system timestamp (ISO format)
+   - Timestamp in milliseconds
+   - Sequential message counter
+4. **Gap Detection**: Client detects network gaps when messages are >150ms apart
+5. **Real-time Display**: Shows latest timestamp, message count, and any detected gaps
 
-**Load Balancer Compatibility**: All traffic (HTTP and WebSocket) flows through port 8080, ensuring your F5 load balancer can properly route and monitor all connections.
+## Message Format
 
-## Load Balancer Testing
+The server sends JSON messages with this structure:
+```json
+{
+  "type": "timestamp",
+  "timestamp_iso": "2025-07-31 10:30:45",
+  "timestamp_ms": 1722445845123,
+  "message_count": 42
+}
+```
 
-This application is specifically designed for testing F5 load balancers during live migrations:
+## Network Connectivity Testing
 
-1. **Deploy behind F5**: Configure your F5 to forward traffic to multiple instances
-2. **Start streaming**: Connect clients and start audio playback
-3. **Perform migration**: Live migrate servers or perform failover
-4. **Monitor continuity**: Any audio interruption indicates load balancer issues
+This application is useful for:
 
-The continuous audio stream makes it easy to detect even brief interruptions during migrations.
+1. **Load Balancer Testing**: Deploy behind a load balancer to test WebSocket handling
+2. **Network Reliability**: Monitor for packet loss or connection interruptions  
+3. **Failover Testing**: Detect gaps during server migrations or failovers
+4. **Latency Monitoring**: Observe real-time message delivery patterns
+
+Any gap longer than 150ms will be highlighted as a potential connectivity issue.
 
 ## File Structure
 
 ```
-load-balancer-audio-test/
+simple-websocket-stream/
 ├── server.py              # Python WebSocket server
 ├── static/
 │   └── index.html         # Web client interface
-├── audio.mp3              # Your audio file (add this)
 ├── requirements.txt       # Python dependencies
 └── README.md             # This file
 ```
 
+## Configuration
+
+To change the port, edit `server.py` line 122:
+```python
+web.run_app(app_coro, host="0.0.0.0", port=8970)
+```
+
 ## Troubleshooting
 
-- **"No audio file found" warning**: Make sure you have `audio.mp3` or `audio.wav` in the project root
-- **WebSocket connection fails**: Check your load balancer WebSocket configuration
-- **No audio playback**: Click in the browser first to satisfy autoplay policies
-- **Audio choppy through load balancer**: Check load balancer session persistence settings
+- **WebSocket connection fails**: Check firewall settings and ensure port 8970 is accessible
+- **No timestamp updates**: Check browser console for JavaScript errors
+- **Connection immediately drops**: Verify server is running and WebSocket support is enabled
 
 ## Technical Details
 
-- **Backend**: Python with aiohttp and PyAV
-- **Frontend**: Vanilla JavaScript with Web Audio API
-- **Audio Transport**: Raw PCM data over WebSocket
-- **Connection**: HTTP upgrade to WebSocket on port 8080
-- **Audio Format**: 44.1kHz 16-bit stereo PCM
-
-## Load Balancer Configuration
-
-For F5 load balancers, ensure:
-- WebSocket support is enabled
-- Session persistence is configured if needed
-- Health checks monitor the HTTP endpoint
-- Timeout values account for long-lived WebSocket connections
+- **Backend**: Python with aiohttp WebSocket support
+- **Frontend**: Vanilla JavaScript with WebSocket API
+- **Message Transport**: JSON over WebSocket
+- **Update Frequency**: 100ms (10 messages per second)
+- **Gap Detection Threshold**: 150ms
 
 ## Browser Compatibility
 
-Works with modern browsers that support WebSockets and Web Audio API:
-- Chrome 23+
-- Firefox 25+
-- Safari 14+
+Works with modern browsers that support WebSockets:
+- Chrome 16+
+- Firefox 11+
+- Safari 7+
 - Edge 12+
