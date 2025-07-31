@@ -12,26 +12,8 @@ A simple WebRTC audio streaming server that streams audio files to web browsers 
 ## Requirements
 
 - Python 3.8 or higher
-- FFmpeg libraries (for audio processing)
 
-### macOS Setup
-
-Install FFmpeg using Homebrew:
-```bash
-brew install ffmpeg
-```
-
-### Linux Setup
-
-Install FFmpeg and development libraries:
-```bash
-# Ubuntu/Debian
-sudo apt update
-sudo apt install ffmpeg libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev
-
-# CentOS/RHEL/Fedora
-sudo dnf install ffmpeg-devel
-```
+**Note**: The required audio processing libraries (FFmpeg) are included with the PyAV package installation. No additional system libraries need to be installed on most systems.
 
 ## Installation
 
