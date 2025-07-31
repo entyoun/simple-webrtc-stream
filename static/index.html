@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>WebRTC Audio Stream</title>
+    <title>WebSocket Audio Stream</title>
     <meta charset="utf-8">
     <style>
         body {
@@ -41,21 +41,41 @@
             background: #f8d7da !important;
             color: #721c24;
         }
+        #info {
+            background: #e7f3ff;
+            border: 1px solid #b3d9ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
     </style>
 </head>
 <body>
-    <h1>WebRTC Audio Stream Test</h1>
-    <p>Click "Start Stream" to begin receiving audio from the server.</p>
+    <h1>WebSocket Timestamp Stream</h1>
+    
+    <div id="info">
+        <strong>Network Connectivity Monitor</strong><br>
+        This application receives timestamp messages every 100ms through WebSockets.
+        Perfect for detecting gaps in network connectivity.
+    </div>
+    
+    <p>Click "Start Stream" to begin receiving timestamps from the server via WebSocket.</p>
     
     <button id="startBtn" onclick="start()">Start Stream</button>
     <button id="stopBtn" onclick="stop()" disabled>Stop Stream</button>
     
     <div id="status">Ready to connect...</div>
     
-    <audio id="audioElement" controls autoplay style="width: 100%; margin-top: 20px;"></audio>
+    <div id="timestampDisplay" style="font-family: monospace; background: #f8f9fa; padding: 15px; border-radius: 5px; margin-top: 20px; border: 1px solid #ddd;">
+        <div><strong>Latest Message:</strong></div>
+        <div id="latestTimestamp">Waiting for data...</div>
+        <div style="margin-top: 10px;"><strong>Message Count:</strong> <span id="messageCount">0</span></div>
+        <div><strong>Last Gap:</strong> <span id="lastGap">None detected</span></div>
+    </div>
 
     <script>
-        let pc = null;
+        let ws = null;
+        let audioContext = null;
         let audioElement = document.getElementById('audioElement');
         let startBtn = document.getElementById('startBtn');
         let stopBtn = document.getElementById('stopBtn');
@@ -69,88 +89,48 @@
         async function start() {
             try {
                 startBtn.disabled = true;
-                updateStatus('Connecting...');
+                updateStatus('Connecting to WebSocket...');
 
-                pc = new RTCPeerConnection({
-                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-                });
+                // Create WebSocket connection
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws`;
+                
+                ws = new WebSocket(wsUrl);
+                ws.binaryType = 'arraybuffer';
 
-                // Add a transceiver to indicate we want to receive audio
-                pc.addTransceiver('audio', { direction: 'recvonly' });
+                ws.onopen = () => {
+                    console.log('WebSocket connected');
+                    updateStatus('Connected - initializing audio...', 'connected');
+                    initializeAudio();
+                    
+                    // Request to start streaming
+                    ws.send(JSON.stringify({ action: 'start_stream' }));
+                };
 
-                pc.ontrack = (event) => {
-                    console.log('Received track:', event.track.kind);
-                    if (event.track.kind === 'audio') {
-                        audioElement.srcObject = event.streams[0];
-                        updateStatus('Connected - receiving audio stream', 'connected');
-                        stopBtn.disabled = false;
+                ws.onmessage = async (event) => {
+                    if (typeof event.data === 'string') {
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (data.type === 'timestamp') {
+                                handleTimestamp(data);
+                            }
+                        } catch (e) {
+                            console.error('Error parsing message:', e);
+                        }
                     }
                 };
 
-                pc.onconnectionstatechange = () => {
-                    console.log('Connection state:', pc.connectionState);
-                    if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                        updateStatus('Connection failed or disconnected', 'error');
-                        stop();
-                    }
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    updateStatus('WebSocket connection error', 'error');
+                    startBtn.disabled = false;
                 };
 
-                pc.oniceconnectionstatechange = () => {
-                    console.log('ICE connection state:', pc.iceConnectionState);
-                    if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-                        updateStatus('ICE connected - waiting for media', 'connected');
-                    } else if (pc.iceConnectionState === 'failed') {
-                        updateStatus('ICE connection failed', 'error');
-                        stop();
-                    }
+                ws.onclose = () => {
+                    console.log('WebSocket disconnected');
+                    updateStatus('Disconnected');
+                    stop();
                 };
-
-                pc.onicegatheringstatechange = () => {
-                    console.log('ICE gathering state:', pc.iceGatheringState);
-                };
-
-                pc.onicecandidate = (event) => {
-                    console.log('ICE candidate:', event.candidate);
-                };
-
-                // Add timeout for connection
-                const connectionTimeout = setTimeout(() => {
-                    if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
-                        console.error('Connection timeout after 10 seconds');
-                        updateStatus('Connection timeout - try refreshing the page', 'error');
-                        stop();
-                    }
-                }, 10000);
-
-                const offer = await pc.createOffer();
-                console.log('Created offer:', offer);
-                await pc.setLocalDescription(offer);
-
-                const response = await fetch('/offer', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        sdp: pc.localDescription.sdp,
-                        type: pc.localDescription.type
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
-                const answer = await response.json();
-                console.log('Received answer:', answer);
-                await pc.setRemoteDescription(new RTCSessionDescription(answer));
-
-                // Clear timeout if connection succeeds
-                pc.addEventListener('iceconnectionstatechange', () => {
-                    if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-                        clearTimeout(connectionTimeout);
-                    }
-                });
 
             } catch (error) {
                 console.error('Error starting stream:', error);
@@ -159,17 +139,60 @@
             }
         }
 
+        let lastMessageCount = 0;
+        let lastReceiveTime = 0;
+
+        async function initializeAudio() {
+            try {
+                updateStatus('Connected - receiving timestamp stream', 'connected');
+                stopBtn.disabled = false;
+                lastMessageCount = 0;
+                lastReceiveTime = Date.now();
+            } catch (error) {
+                console.error('Error initializing:', error);
+                updateStatus('Error initializing: ' + error.message, 'error');
+            }
+        }
+
+        function handleTimestamp(data) {
+            const now = Date.now();
+            const timeSinceLastMessage = now - lastReceiveTime;
+            
+            // Update display
+            document.getElementById('latestTimestamp').textContent = data.timestamp_iso;
+            document.getElementById('messageCount').textContent = data.message_count;
+            
+            // Check for gaps (more than 150ms indicates a missed message)
+            if (lastReceiveTime > 0 && timeSinceLastMessage > 150) {
+                const gapDuration = timeSinceLastMessage;
+                const missedMessages = data.message_count - lastMessageCount - 1;
+                document.getElementById('lastGap').textContent = 
+                    `${gapDuration}ms gap, ${missedMessages} missed messages`;
+                document.getElementById('lastGap').style.color = '#dc3545';
+                console.warn(`Network gap detected: ${gapDuration}ms, missed ${missedMessages} messages`);
+            }
+            
+            lastMessageCount = data.message_count;
+            lastReceiveTime = now;
+        }
+
         function stop() {
-            if (pc) {
-                pc.close();
-                pc = null;
+            if (ws) {
+                ws.close();
+                ws = null;
             }
             
-            if (audioElement.srcObject) {
-                audioElement.srcObject.getTracks().forEach(track => track.stop());
-                audioElement.srcObject = null;
+            if (audioElement.src) {
+                URL.revokeObjectURL(audioElement.src);
+                audioElement.src = '';
             }
             
+            document.getElementById('latestTimestamp').textContent = 'Disconnected';
+            document.getElementById('messageCount').textContent = '0';
+            document.getElementById('lastGap').textContent = 'None detected';
+            document.getElementById('lastGap').style.color = '';
+            lastMessageCount = 0;
+            lastReceiveTime = 0;
             startBtn.disabled = false;
             stopBtn.disabled = true;
             updateStatus('Disconnected');

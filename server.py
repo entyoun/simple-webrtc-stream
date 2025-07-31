@@ -2,108 +2,103 @@ import asyncio
 import json
 import logging
 import os
-from aiohttp import web
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
-from aiortc.contrib.media import MediaPlayer
+import wave
+import time
+from aiohttp import web, WSMsgType
+import av
 
 logging.basicConfig(level=logging.INFO)
 
-pcs = set()
+# Store active WebSocket connections
+websockets = set()
 
 async def index(request):
     content = open(os.path.join(os.path.dirname(__file__), "static", "index.html"), "r").read()
     return web.Response(content_type="text/html", text=content)
 
-async def offer(request):
-    params = await request.json()
-    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
-
-    pc = RTCPeerConnection(
-        configuration=RTCConfiguration([
-            RTCIceServer(urls=["stun:stun.l.google.com:19302"])
-        ])
-    )
-    pcs.add(pc)
-
-    @pc.on("connectionstatechange")
-    async def on_connectionstatechange():
-        logging.info(f"Connection state is {pc.connectionState}")
-        if pc.connectionState == "closed":
-            pcs.discard(pc)
+async def websocket_handler(request):
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
     
-    @pc.on("iceconnectionstatechange")
-    async def on_iceconnectionstatechange():
-        logging.info(f"ICE connection state is {pc.iceConnectionState}")
+    websockets.add(ws)
+    logging.info(f"WebSocket client connected. Total connections: {len(websockets)}")
     
-    @pc.on("icegatheringstatechange")
-    async def on_icegatheringstatechange():
-        logging.info(f"ICE gathering state is {pc.iceGatheringState}")
-    
-    @pc.on("icecandidate")
-    async def on_icecandidate(candidate):
-        logging.info(f"ICE candidate: {candidate}")
-    
-    @pc.on("track")
-    async def on_track(track):
-        logging.info(f"Track received: {track.kind}")
-
     try:
-        # Set remote description first
-        await pc.setRemoteDescription(offer)
-        
-        # Find and add audio file after setting remote description
-        audio_file = os.path.join(os.path.dirname(__file__), "audio.wav")
-        if not os.path.exists(audio_file):
-            audio_file = os.path.join(os.path.dirname(__file__), "audio.mp3")
-        
-        if os.path.exists(audio_file):
-            player = MediaPlayer(audio_file, loop=True)
-            if player.audio:
-                # Simple addTrack without direction specification
-                track = pc.addTrack(player.audio)
-                logging.info(f"Added audio track to peer connection: {track}")
-        else:
-            logging.warning("No audio file found (audio.wav or audio.mp3)")
-        
-        # Create and set answer
-        answer = await pc.createAnswer()
-        
-        # Workaround for aiortc direction bug
-        for transceiver in pc.getTransceivers():
-            if transceiver._offerDirection is None:
-                transceiver._offerDirection = "recvonly"
-        
-        await pc.setLocalDescription(answer)
-
-        return web.Response(
-            content_type="application/json",
-            text=json.dumps({
-                "sdp": pc.localDescription.sdp,
-                "type": pc.localDescription.type
-            })
-        )
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                if data.get('action') == 'start_stream':
+                    logging.info("Client requested to start audio stream")
+                    # Streaming will be handled by the background task
+            elif msg.type == WSMsgType.ERROR:
+                logging.error(f'WebSocket error: {ws.exception()}')
     except Exception as e:
-        logging.error(f"Error in offer handling: {e}")
-        import traceback
-        traceback.print_exc()
-        if pc in pcs:
-            pcs.discard(pc)
-        return web.Response(
-            status=500,
-            content_type="application/json",
-            text=json.dumps({"error": str(e)})
-        )
+        logging.error(f"WebSocket error: {e}")
+    finally:
+        websockets.discard(ws)
+        logging.info(f"WebSocket client disconnected. Total connections: {len(websockets)}")
+    
+    return ws
 
-async def on_shutdown(app):
-    coros = [pc.close() for pc in pcs]
-    await asyncio.gather(*coros)
-    pcs.clear()
+async def send_timestamps():
+    """Background task to send timestamp messages to all connected WebSocket clients"""
+    global websockets
+    
+    logging.info("Starting timestamp streaming every 100ms")
+    
+    message_count = 0
+    
+    while True:
+        try:
+            if websockets:
+                # Get current system time
+                current_time = time.time()
+                timestamp_iso = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(current_time))
+                timestamp_ms = int(current_time * 1000)
+                
+                message_count += 1
+                
+                message = {
+                    'type': 'timestamp',
+                    'timestamp_iso': timestamp_iso,
+                    'timestamp_ms': timestamp_ms,
+                    'message_count': message_count
+                }
+                
+                message_json = json.dumps(message)
+                
+                # Send to all connected WebSocket clients
+                disconnected = set()
+                for ws in websockets.copy():
+                    try:
+                        await ws.send_str(message_json)
+                    except ConnectionResetError:
+                        disconnected.add(ws)
+                    except Exception as e:
+                        logging.error(f"Error sending timestamp: {e}")
+                        disconnected.add(ws)
+                
+                # Remove disconnected clients
+                websockets -= disconnected
+            
+            # Wait 100ms before next message
+            await asyncio.sleep(0.1)
+            
+        except Exception as e:
+            logging.error(f"Error in timestamp streaming: {e}")
+            await asyncio.sleep(1)
 
-if __name__ == "__main__":
+async def init_app():
     app = web.Application()
     app.router.add_get("/", index)
-    app.router.add_post("/offer", offer)
+    app.router.add_get("/ws", websocket_handler)
     app.router.add_static("/static/", path="static", name="static")
-    app.on_shutdown.append(on_shutdown)
     
-    web.run_app(app, host="0.0.0.0", port=8080)
+    # Start background timestamp streaming task
+    asyncio.create_task(send_timestamps())
+    
+    return app
+
+if __name__ == "__main__":
+    app_coro = init_app()
+    web.run_app(app_coro, host="0.0.0.0", port=8970)

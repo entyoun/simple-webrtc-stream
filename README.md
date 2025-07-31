@@ -1,11 +1,13 @@
-# Simple WebRTC Audio Stream
+# Load Balancer Audio Stream Test
 
-A simple WebRTC audio streaming server that streams audio files to web browsers using Python and aiortc.
+A WebSocket-based audio streaming server designed for testing F5 load balancers and live migration scenarios. All traffic flows through port 8080, making it perfect for load balancer testing.
 
 ## Features
 
-- Stream audio files (MP3/WAV) to web browsers via WebRTC
-- Real-time audio streaming using RTP over UDP
+- Stream audio files (MP3/WAV) to web browsers via WebSocket
+- All traffic flows through port 8080 (load balancer compatible)
+- Real-time audio streaming using raw PCM data
+- Perfect for testing live migrations and failover scenarios
 - Simple web interface for connecting and listening
 - Low-latency audio delivery
 
@@ -51,16 +53,30 @@ A simple WebRTC audio streaming server that streams audio files to web browsers 
 
 ## How It Works
 
-1. **HTTP Server**: Serves the web interface and handles WebRTC signaling on port 8080
-2. **WebRTC Negotiation**: Client and server exchange SDP offers/answers via HTTP
-3. **RTP Streaming**: Audio data flows via RTP over UDP on dynamically allocated ports
-4. **ICE**: Uses STUN servers for NAT traversal and peer-to-peer connection establishment
+1. **HTTP Server**: Serves the web interface on port 8080
+2. **WebSocket Connection**: Client connects to `/ws` endpoint for streaming
+3. **Audio Processing**: Server decodes audio file and converts to raw PCM data
+4. **Real-time Streaming**: Audio chunks sent via WebSocket as binary data
+5. **Client Playback**: Browser receives PCM data and plays via Web Audio API
+
+**Load Balancer Compatibility**: All traffic (HTTP and WebSocket) flows through port 8080, ensuring your F5 load balancer can properly route and monitor all connections.
+
+## Load Balancer Testing
+
+This application is specifically designed for testing F5 load balancers during live migrations:
+
+1. **Deploy behind F5**: Configure your F5 to forward traffic to multiple instances
+2. **Start streaming**: Connect clients and start audio playback
+3. **Perform migration**: Live migrate servers or perform failover
+4. **Monitor continuity**: Any audio interruption indicates load balancer issues
+
+The continuous audio stream makes it easy to detect even brief interruptions during migrations.
 
 ## File Structure
 
 ```
-simple-webrtc-stream/
-├── server.py              # Python WebRTC server
+load-balancer-audio-test/
+├── server.py              # Python WebSocket server
 ├── static/
 │   └── index.html         # Web client interface
 ├── audio.mp3              # Your audio file (add this)
@@ -71,21 +87,30 @@ simple-webrtc-stream/
 ## Troubleshooting
 
 - **"No audio file found" warning**: Make sure you have `audio.mp3` or `audio.wav` in the project root
-- **Connection timeout**: Check your firewall settings and ensure UDP traffic is allowed
-- **No audio playback**: Verify your browser supports WebRTC and audio autoplay policies
+- **WebSocket connection fails**: Check your load balancer WebSocket configuration
+- **No audio playback**: Click in the browser first to satisfy autoplay policies
+- **Audio choppy through load balancer**: Check load balancer session persistence settings
 
 ## Technical Details
 
-- **Backend**: Python with aiortc library
-- **Frontend**: Vanilla JavaScript with WebRTC APIs
-- **Audio Transport**: RTP over UDP
-- **Signaling**: HTTP REST API
-- **NAT Traversal**: STUN (stun.l.google.com:19302)
+- **Backend**: Python with aiohttp and PyAV
+- **Frontend**: Vanilla JavaScript with Web Audio API
+- **Audio Transport**: Raw PCM data over WebSocket
+- **Connection**: HTTP upgrade to WebSocket on port 8080
+- **Audio Format**: 44.1kHz 16-bit stereo PCM
+
+## Load Balancer Configuration
+
+For F5 load balancers, ensure:
+- WebSocket support is enabled
+- Session persistence is configured if needed
+- Health checks monitor the HTTP endpoint
+- Timeout values account for long-lived WebSocket connections
 
 ## Browser Compatibility
 
-Works with modern browsers that support WebRTC:
+Works with modern browsers that support WebSockets and Web Audio API:
 - Chrome 23+
-- Firefox 22+
-- Safari 11+
-- Edge 15+
+- Firefox 25+
+- Safari 14+
+- Edge 12+
