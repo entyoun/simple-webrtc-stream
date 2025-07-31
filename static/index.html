@@ -146,8 +146,14 @@
             try {
                 updateStatus('Connected - receiving timestamp stream', 'connected');
                 stopBtn.disabled = false;
+                // Reset all counters for new stream
                 lastMessageCount = 0;
                 lastReceiveTime = Date.now();
+                // Clear display
+                document.getElementById('latestTimestamp').textContent = 'Waiting for data...';
+                document.getElementById('messageCount').textContent = '0';
+                document.getElementById('lastGap').textContent = 'None detected';
+                document.getElementById('lastGap').style.color = '';
             } catch (error) {
                 console.error('Error initializing:', error);
                 updateStatus('Error initializing: ' + error.message, 'error');
@@ -182,11 +188,7 @@
                 ws = null;
             }
             
-            if (audioElement.src) {
-                URL.revokeObjectURL(audioElement.src);
-                audioElement.src = '';
-            }
-            
+            // Reset all display and state
             document.getElementById('latestTimestamp').textContent = 'Disconnected';
             document.getElementById('messageCount').textContent = '0';
             document.getElementById('lastGap').textContent = 'None detected';
