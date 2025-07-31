@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>WebSocket Timestamp Stream</title>
+    <title>WebSocket Application Connectivity Monitor</title>
     <meta charset="utf-8">
     <style>
         body {
@@ -51,7 +51,7 @@
     </style>
 </head>
 <body>
-    <h1>WebSocket Timestamp Stream</h1>
+    <h1>WebSocket Application Connectivity Monitor</h1>
     
     <div id="info">
         <strong>Network Connectivity Monitor</strong><br>
@@ -59,23 +59,58 @@
         Perfect for detecting gaps in network connectivity.
     </div>
     
-    <p>Click "Start Stream" to begin receiving timestamps from the server via WebSocket.</p>
+    <p>Click "Start Test" to begin network connectivity monitoring via WebSocket.</p>
     
-    <button id="startBtn" onclick="start()">Start Stream</button>
-    <button id="stopBtn" onclick="stop()" disabled>Stop Stream</button>
+    <button id="startBtn" onclick="start()">Start Test</button>
+    <button id="stopBtn" onclick="stop()" disabled>Stop Test</button>
     
     <div id="status">Ready to connect...</div>
     
+    <!-- Real-time Metrics HUD -->
+    <div id="metricsHUD" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-top: 20px;">
+        <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; border: 1px solid #ddd;">
+            <div style="font-weight: bold; margin-bottom: 10px;">Gap (ms)</div>
+            <canvas id="gapSparkline" width="200" height="60" style="width: 100%; height: 60px;"></canvas>
+            <div style="font-family: monospace; margin-top: 5px;">Current: <span id="currentGap">0</span>ms</div>
+        </div>
+        <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; border: 1px solid #ddd;">
+            <div style="font-weight: bold; margin-bottom: 10px;">RTT (ms)</div>
+            <canvas id="rttSparkline" width="200" height="60" style="width: 100%; height: 60px;"></canvas>
+            <div style="font-family: monospace; margin-top: 5px;">Current: <span id="currentRTT">0</span>ms</div>
+        </div>
+        <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; border: 1px solid #ddd;">
+            <div style="font-weight: bold; margin-bottom: 10px;">Jitter (ms)</div>
+            <canvas id="jitterSparkline" width="200" height="60" style="width: 100%; height: 60px;"></canvas>
+            <div style="font-family: monospace; margin-top: 5px;">Current: <span id="currentJitter">0</span>ms</div>
+        </div>
+    </div>
+
     <div id="timestampDisplay" style="font-family: monospace; background: #f8f9fa; padding: 15px; border-radius: 5px; margin-top: 20px; border: 1px solid #ddd;">
         <div><strong>Latest Message:</strong></div>
         <div id="latestTimestamp">Waiting for data...</div>
         <div style="margin-top: 10px;"><strong>Message Count:</strong> <span id="messageCount">0</span></div>
         <div><strong>Last Gap:</strong> <span id="lastGap">None detected</span></div>
+        <div style="margin-top: 10px;">
+            <button id="exportBtn" onclick="exportData()" disabled style="margin-right: 10px;">Export Data</button>
+            <span id="dataPoints" style="color: #666;">0 data points collected</span>
+        </div>
     </div>
 
     <script>
         let ws = null;
         // Variables for timestamp stream handling
+        let streamData = [];
+        let gapHistory = [];
+        let rttHistory = [];
+        let jitterHistory = [];
+        let lastRTT = 0;
+        let isRetrying = false;
+        let retryCount = 0;
+        const maxRetries = 3;
+        
+        // Sparkline canvases
+        let gapCanvas, rttCanvas, jitterCanvas;
+        let gapCtx, rttCtx, jitterCtx;
         let startBtn = document.getElementById('startBtn');
         let stopBtn = document.getElementById('stopBtn');
         let status = document.getElementById('status');
@@ -121,14 +156,16 @@
 
                 ws.onerror = (error) => {
                     console.error('WebSocket error:', error);
-                    updateStatus('WebSocket connection error', 'error');
-                    startBtn.disabled = false;
+                    const errorMsg = getErrorMessage(error);
+                    updateStatus(`WebSocket error: ${errorMsg}`, 'error');
+                    handleDisconnection('error', errorMsg);
                 };
 
-                ws.onclose = () => {
-                    console.log('WebSocket disconnected');
-                    updateStatus('Disconnected');
-                    stop();
+                ws.onclose = (event) => {
+                    console.log('WebSocket disconnected', event);
+                    const reason = getCloseReason(event.code);
+                    updateStatus(`Disconnected: ${reason}`);
+                    handleDisconnection('close', reason, event.code);
                 };
 
             } catch (error) {
@@ -140,41 +177,186 @@
 
         let lastMessageCount = 0;
         let lastReceiveTime = 0;
+        let lastSentTime = 0;
 
         async function initializeStream() {
             try {
                 updateStatus('Connected - receiving timestamp stream', 'connected');
                 stopBtn.disabled = false;
+                document.getElementById('exportBtn').disabled = false;
+                
                 // Reset all counters for new stream
                 lastMessageCount = 0;
                 lastReceiveTime = Date.now();
+                lastSentTime = Date.now();
+                streamData = [];
+                gapHistory = [];
+                rttHistory = [];
+                jitterHistory = [];
+                lastRTT = 0;
+                retryCount = 0;
+                
                 // Clear display
                 document.getElementById('latestTimestamp').textContent = 'Waiting for data...';
                 document.getElementById('messageCount').textContent = '0';
                 document.getElementById('lastGap').textContent = 'None detected';
                 document.getElementById('lastGap').style.color = '';
+                document.getElementById('dataPoints').textContent = '0 data points collected';
+                
+                // Initialize sparkline canvases
+                initializeSparklines();
+                
             } catch (error) {
                 console.error('Error initializing:', error);
                 updateStatus('Error initializing: ' + error.message, 'error');
             }
+        }
+        
+        function initializeSparklines() {
+            gapCanvas = document.getElementById('gapSparkline');
+            rttCanvas = document.getElementById('rttSparkline');
+            jitterCanvas = document.getElementById('jitterSparkline');
+            
+            if (gapCanvas && rttCanvas && jitterCanvas) {
+                gapCtx = gapCanvas.getContext('2d');
+                rttCtx = rttCanvas.getContext('2d');
+                jitterCtx = jitterCanvas.getContext('2d');
+                
+                // Clear canvases
+                clearSparkline(gapCtx, gapCanvas);
+                clearSparkline(rttCtx, rttCanvas);
+                clearSparkline(jitterCtx, jitterCanvas);
+            }
+        }
+        
+        function clearSparkline(ctx, canvas) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = '#ddd';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(0, canvas.height / 2);
+            ctx.lineTo(canvas.width, canvas.height / 2);
+            ctx.stroke();
+        }
+        
+        function drawSparkline(ctx, canvas, data, color = '#007bff') {
+            if (!data || data.length < 2) return;
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw baseline
+            ctx.strokeStyle = '#ddd';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(0, canvas.height / 2);
+            ctx.lineTo(canvas.width, canvas.height / 2);
+            ctx.stroke();
+            
+            // Draw data line
+            const max = Math.max(...data, 1);
+            const min = Math.min(...data, 0);
+            const range = max - min || 1;
+            
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            
+            data.forEach((value, index) => {
+                const x = (index / (data.length - 1)) * canvas.width;
+                const y = canvas.height - ((value - min) / range) * canvas.height;
+                
+                if (index === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+            
+            ctx.stroke();
+            
+            // Add subtle axis labels
+            ctx.fillStyle = '#999';
+            ctx.font = '9px Arial';
+            ctx.textAlign = 'left';
+            
+            // Y-axis labels (top and bottom values)
+            if (max > min) {
+                ctx.fillText(Math.round(max), 2, 10);
+                ctx.fillText(Math.round(min), 2, canvas.height - 2);
+            }
+            
+            // X-axis labels (time indicators)
+            ctx.textAlign = 'right';
+            ctx.fillText('now', canvas.width - 2, canvas.height - 2);
+            ctx.textAlign = 'left';
+            ctx.fillText('-30s', 2, canvas.height - 2);
         }
 
         function handleTimestamp(data) {
             const now = Date.now();
             const timeSinceLastMessage = now - lastReceiveTime;
             
+            // Calculate RTT (approximate - based on expected 100ms interval)
+            const expectedInterval = 100;
+            const rtt = Math.abs(timeSinceLastMessage - expectedInterval);
+            
+            // Calculate jitter (variation in RTT)
+            const jitter = Math.abs(rtt - lastRTT);
+            lastRTT = rtt;
+            
+            // Record data point
+            const dataPoint = {
+                timestamp: now,
+                serverTime: data.timestamp_ms,
+                messageCount: data.message_count,
+                gap: timeSinceLastMessage,
+                rtt: rtt,
+                jitter: jitter,
+                missedMessages: lastReceiveTime > 0 ? Math.max(0, data.message_count - lastMessageCount - 1) : 0
+            };
+            
+            streamData.push(dataPoint);
+            
+            // Update histories (keep last 30 seconds worth of data - 300 points at 100ms intervals)
+            const maxHistory = 300;
+            gapHistory.push(timeSinceLastMessage);
+            rttHistory.push(rtt);
+            jitterHistory.push(jitter);
+            
+            if (gapHistory.length > maxHistory) {
+                gapHistory.shift();
+                rttHistory.shift();
+                jitterHistory.shift();
+            }
+            
             // Update display
             document.getElementById('latestTimestamp').textContent = data.timestamp_iso;
             document.getElementById('messageCount').textContent = data.message_count;
+            document.getElementById('dataPoints').textContent = `${streamData.length} data points collected`;
+            
+            // Update current metrics
+            document.getElementById('currentGap').textContent = Math.round(timeSinceLastMessage);
+            document.getElementById('currentRTT').textContent = Math.round(rtt);
+            document.getElementById('currentJitter').textContent = Math.round(jitter);
             
             // Check for gaps (more than 150ms indicates a missed message)
             if (lastReceiveTime > 0 && timeSinceLastMessage > 150) {
                 const gapDuration = timeSinceLastMessage;
-                const missedMessages = data.message_count - lastMessageCount - 1;
+                const missedMessages = dataPoint.missedMessages;
                 document.getElementById('lastGap').textContent = 
                     `${gapDuration}ms gap, ${missedMessages} missed messages`;
                 document.getElementById('lastGap').style.color = '#dc3545';
                 console.warn(`Network gap detected: ${gapDuration}ms, missed ${missedMessages} messages`);
+            } else {
+                document.getElementById('lastGap').textContent = 'None detected';
+                document.getElementById('lastGap').style.color = '';
+            }
+            
+            // Update sparklines
+            if (gapCtx && rttCtx && jitterCtx) {
+                drawSparkline(gapCtx, gapCanvas, gapHistory, '#dc3545');
+                drawSparkline(rttCtx, rttCanvas, rttHistory, '#28a745');
+                drawSparkline(jitterCtx, jitterCanvas, jitterHistory, '#ffc107');
             }
             
             lastMessageCount = data.message_count;
@@ -182,21 +364,142 @@
         }
 
         function stop() {
+            isRetrying = false;
+            retryCount = 0;
+            
             if (ws) {
                 ws.close();
                 ws = null;
             }
             
-            // Reset all display and state
+            // Keep data for export, but reset display
             document.getElementById('latestTimestamp').textContent = 'Disconnected';
-            document.getElementById('messageCount').textContent = '0';
-            document.getElementById('lastGap').textContent = 'None detected';
-            document.getElementById('lastGap').style.color = '';
-            lastMessageCount = 0;
-            lastReceiveTime = 0;
+            document.getElementById('currentGap').textContent = '0';
+            document.getElementById('currentRTT').textContent = '0';
+            document.getElementById('currentJitter').textContent = '0';
+            
             startBtn.disabled = false;
             stopBtn.disabled = true;
+            document.getElementById('exportBtn').disabled = streamData.length === 0;
             updateStatus('Disconnected');
+        }
+        
+        function handleDisconnection(type, reason, code = null) {
+            const wasUnexpected = !stopBtn.disabled && !isRetrying;
+            
+            if (wasUnexpected && retryCount < maxRetries) {
+                retryCount++;
+                isRetrying = true;
+                updateStatus(`Connection lost (${reason}). Retrying... (${retryCount}/${maxRetries})`, 'error');
+                
+                setTimeout(() => {
+                    if (isRetrying) {
+                        console.log(`Attempting retry ${retryCount}/${maxRetries}`);
+                        start();
+                    }
+                }, 2000);
+            } else {
+                if (retryCount >= maxRetries) {
+                    updateStatus(`Connection lost after ${maxRetries} retry attempts: ${reason}`, 'error');
+                }
+                stop();
+            }
+        }
+        
+        function getErrorMessage(error) {
+            if (error.type === 'error') return 'Network error';
+            return 'Unknown error';
+        }
+        
+        function getCloseReason(code) {
+            switch (code) {
+                case 1000: return 'Normal closure';
+                case 1001: return 'Going away';
+                case 1002: return 'Protocol error';
+                case 1003: return 'Unsupported data';
+                case 1004: return 'Reserved';
+                case 1005: return 'No status received';
+                case 1006: return 'Abnormal closure';
+                case 1007: return 'Invalid frame payload data';
+                case 1008: return 'Policy violation';
+                case 1009: return 'Message too big';
+                case 1010: return 'Missing extension';
+                case 1011: return 'Internal error';
+                case 1015: return 'TLS handshake failed';
+                default: return `Unknown (${code})`;
+            }
+        }
+        
+        function exportData() {
+            if (streamData.length === 0) {
+                alert('No data to export');
+                return;
+            }
+            
+            const exportType = prompt('Export format (csv or json)?', 'csv').toLowerCase();
+            
+            if (exportType === 'csv') {
+                exportCSV();
+            } else if (exportType === 'json') {
+                exportJSON();
+            } else {
+                alert('Invalid format. Use "csv" or "json"');
+            }
+        }
+        
+        function exportCSV() {
+            const headers = ['timestamp', 'serverTime', 'messageCount', 'gap_ms', 'rtt_ms', 'jitter_ms', 'missedMessages'];
+            const csvContent = [headers.join(',')];
+            
+            streamData.forEach(point => {
+                const row = [
+                    new Date(point.timestamp).toISOString(),
+                    new Date(point.serverTime).toISOString(),
+                    point.messageCount,
+                    point.gap.toFixed(2),
+                    point.rtt.toFixed(2),
+                    point.jitter.toFixed(2),
+                    point.missedMessages
+                ];
+                csvContent.push(row.join(','));
+            });
+            
+            downloadFile(csvContent.join('\n'), 'network-test-data.csv', 'text/csv');
+        }
+        
+        function exportJSON() {
+            const exportData = {
+                testInfo: {
+                    startTime: streamData.length > 0 ? new Date(streamData[0].timestamp).toISOString() : null,
+                    endTime: streamData.length > 0 ? new Date(streamData[streamData.length - 1].timestamp).toISOString() : null,
+                    duration: streamData.length > 0 ? streamData[streamData.length - 1].timestamp - streamData[0].timestamp : 0,
+                    totalMessages: streamData.length,
+                    totalMissedMessages: streamData.reduce((sum, p) => sum + p.missedMessages, 0)
+                },
+                metrics: {
+                    avgGap: streamData.reduce((sum, p) => sum + p.gap, 0) / streamData.length,
+                    avgRTT: streamData.reduce((sum, p) => sum + p.rtt, 0) / streamData.length,
+                    avgJitter: streamData.reduce((sum, p) => sum + p.jitter, 0) / streamData.length,
+                    maxGap: Math.max(...streamData.map(p => p.gap)),
+                    maxRTT: Math.max(...streamData.map(p => p.rtt)),
+                    maxJitter: Math.max(...streamData.map(p => p.jitter))
+                },
+                data: streamData
+            };
+            
+            downloadFile(JSON.stringify(exportData, null, 2), 'network-test-data.json', 'application/json');
+        }
+        
+        function downloadFile(content, filename, contentType) {
+            const blob = new Blob([content], { type: contentType });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
         }
 
         window.addEventListener('beforeunload', stop);
