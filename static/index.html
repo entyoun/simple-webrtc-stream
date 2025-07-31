@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>WebSocket Audio Stream</title>
+    <title>WebSocket Timestamp Stream</title>
     <meta charset="utf-8">
     <style>
         body {
@@ -75,8 +75,7 @@
 
     <script>
         let ws = null;
-        let audioContext = null;
-        let audioElement = document.getElementById('audioElement');
+        // Variables for timestamp stream handling
         let startBtn = document.getElementById('startBtn');
         let stopBtn = document.getElementById('stopBtn');
         let status = document.getElementById('status');
@@ -100,8 +99,8 @@
 
                 ws.onopen = () => {
                     console.log('WebSocket connected');
-                    updateStatus('Connected - initializing audio...', 'connected');
-                    initializeAudio();
+                    updateStatus('Connected - initializing stream...', 'connected');
+                    initializeStream();
                     
                     // Request to start streaming
                     ws.send(JSON.stringify({ action: 'start_stream' }));
@@ -142,7 +141,7 @@
         let lastMessageCount = 0;
         let lastReceiveTime = 0;
 
-        async function initializeAudio() {
+        async function initializeStream() {
             try {
                 updateStatus('Connected - receiving timestamp stream', 'connected');
                 stopBtn.disabled = false;

@@ -28,7 +28,7 @@ async def websocket_handler(request):
             if msg.type == WSMsgType.TEXT:
                 data = json.loads(msg.data)
                 if data.get('action') == 'start_stream':
-                    logging.info("Client requested to start audio stream")
+                    logging.info("Client requested to start timestamp stream")
                     # Streaming will be handled by the background task
             elif msg.type == WSMsgType.ERROR:
                 logging.error(f'WebSocket error: {ws.exception()}')
